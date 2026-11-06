@@ -1,0 +1,38 @@
+
+{
+  "manifest_version": 3,
+  "name": "Perchance Local Bridge",
+  "version": "1.0.0",
+  "description": "Connect Perchance PC Mode to an authorized local Mac server.",
+  "permissions": [],
+  "host_permissions": [
+    "https://perchance.org/*",
+    "https://*.perchance.org/*",
+    "http://127.0.0.1:18777/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://perchance.org/*",
+        "https://*.perchance.org/*"
+      ],
+      "js": ["main.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://perchance.org/*",
+        "https://*.perchance.org/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "ISOLATED"
+    }
+  ]
+}
