@@ -18,10 +18,8 @@ There is no Terms popup and no in-app Setup Guide in this version —
 Open the generator in your browser:
 
 ```
-https://perchance.org/<generator-name>
+https://perchance.org/perchance-browser-coding-agent
 ```
-
-*(Replace `<generator-name>` with the actual generator name. If you fork it, use your copy's URL.)*
 
 You can look around freely — Explorer, editor, AI chat, Terminal tabs are all visible.
 To edit real files on your computer, do the local setup in Section 3 once.
