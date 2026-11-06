@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Coding Agent — Standalone</title>
+<!--
+  CODING AGENT (standalone, simplified version)
+  -------------------------------------------------
+  A tiny browser IDE that talks to a local Node.js file server
+  (server.js from the PC-Mode package) at http://127.0.0.1:18777.
+
+  No external plugins, no CDN, no build step — just this one file.
+  Open it in Chrome (double-click, or serve the folder), start the
+  local server, paste URL + token, press CONNECT.
+
+  AI: uses the Perchance ai-text-plugin (root.generateText). To use this
+  file inside a Perchance generator, keep one line in main.pjs:
+    generateText = {import:ai-text-plugin}
+  Everything else (Explorer / Editor / Terminal / approvals) works
+  as-is. The local server (server.js from the PC-Mode package) must be
+  running on your own PC.
+-->
+<style>
+  html, body { height:100%; }
+  body { background:#04060d; color:#d9ecff; overflow:hidden; margin:0; text-align:left; font-family:"Segoe UI",system-ui,sans-serif; }
+  #mainEl { padding:14px 18px 20px; height:100vh; box-sizing:border-box; display:flex; flex-direction:column; overflow:hidden; position:relative; }
+  #mainEl::before { content:""; position:fixed; inset:0; pointer-events:none; z-index:-1;
+    background:
+      radial-gradient(600px 300px at 15% -5%, rgba(0,240,255,.12), transparent 60%),
+      radial-gradient(700px 350px at 90% 10%, rgba(181,55,242,.12), transparent 60%),
+      radial-gradient(500px 500px at 50% 110%, rgba(0,240,255,.07), transparent 60%),
+      #04060d; }
+  #mainEl::after { content:""; position:fixed; inset:0; pointer-events:none; z-index:-1; opacity:.5;
+    background-image:linear-gradient(rgba(0,240,255,.05) 1px, transparent 1px),linear-gradient(90deg, rgba(0,240,255,.05) 1px, transparent 1px);
+    background-size:34px 34px;
+    mask-image:radial-gradient(ellipse 90% 70% at 50% 20%, black 30%, transparent 75%); }
+  .agent-orb { width:42px; height:42px; border-radius:50%; flex:none;
+    background:conic-gradient(from 0deg, #00f0ff, #b537f2, #00f0ff);
+    animation:spin 6s linear infinite; position:relative;
+    box-shadow:0 0 18px rgba(0,240,255,.7), 0 0 42px rgba(181,55,242,.4); }
+  .agent-orb::after { content:""; position:absolute; inset:6px; border-radius:50%; background:#04060d; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .panel { background:rgba(10,18,36,.72); border:1px solid rgba(0,240,255,.22); border-radius:14px;
+    padding:14px; margin-bottom:12px; backdrop-filter:blur(6px);
+    box-shadow:0 0 0 1px rgba(0,0,0,.4), 0 8px 32px rgba(0,0,0,.5), inset 0 1px 0 rgba(0,240,255,.12); }
+  .panel h4 { margin:0 0 10px 0; font-size:11px; letter-spacing:2px; color:#00f0ff; text-transform:uppercase; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; }
+  .row input[type=text] { flex:1; min-width:200px; background:#060b18; border:1px solid rgba(0,240,255,.3);
+    color:#d9ecff; border-radius:9px; padding:9px 12px; font-size:13px; outline:none; font-family:inherit; }
+  .row input[type=text]:focus { border-color:#00f0ff; box-shadow:0 0 12px rgba(0,240,255,.35); }
+  .btn { background:linear-gradient(180deg, rgba(0,240,255,.16), rgba(0,240,255,.05));
+    border:1px solid rgba(0,240,255,.55); color:#bffaff; border-radius:9px; padding:9px 16px;
+    font-size:13px; letter-spacing:1px; cursor:pointer; font-family:inherit; transition:all .15s; }
+  .btn:hover { box-shadow:0 0 16px rgba(0,240,255,.5); background:rgba(0,240,255,.22); color:#fff; }
+  .btn:active { transform:translateY(1px); }
+  .btn.primary { background:linear-gradient(90deg, rgba(0,240,255,.3), rgba(181,55,242,.3)); border-color:#00f0ff; font-weight:700; }
+  .status-row { display:flex; align-items:center; gap:8px; font-size:13px; color:#9fb4d4; }
+  .dot { width:9px; height:9px; border-radius:50%; background:#ff5470; box-shadow:0 0 8px #ff5470; flex:none; }
+  .dot.on { background:#00ffa3; box-shadow:0 0 10px #00ffa3; animation:pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity:.5; } }
+  .cmd-wrap { display:flex; align-items:center; gap:8px; background:#050a15; border:1px solid rgba(181,55,242,.4);
+    border-radius:9px; padding:0 0 0 12px; }
+  .cmd-wrap span { color:#b537f2; font-weight:700; font-family:Consolas,monospace; }
+  #pcTaskInput { flex:1; background:transparent; border:none; color:#e8f4ff; padding:11px 12px 11px 0;
+    font-size:13px; outline:none; font-family:inherit; box-sizing:border-box; }
+  #uplinkOverlay { position:fixed; inset:0; z-index:90000; display:flex; align-items:center; justify-content:center;
+    padding:16px; box-sizing:border-box; background:rgba(2,5,12,.72); backdrop-filter:blur(6px);
+    opacity:1; transition:opacity .45s ease; }
+  #uplinkOverlay.fade { opacity:0; pointer-events:none; }
+  #uplinkOverlay .uplink-card { width:520px; max-width:100%; margin-bottom:0;
+    transform:scale(1) translateY(0); transition:transform .45s ease;
+    animation:cardIn .5s ease; }
+  @keyframes cardIn { from { transform:scale(.9) translateY(20px); opacity:0; } }
+  #uplinkOverlay.fade .uplink-card { transform:scale(.9) translateY(16px); }
+  #uplinkOverlay.success .uplink-card { border-color:rgba(0,255,163,.65); animation:winPulse .9s ease; }
+  @keyframes winPulse { 0%{box-shadow:0 0 0 rgba(0,255,163,0);} 40%{box-shadow:0 0 70px rgba(0,255,163,.5);} 100%{box-shadow:0 8px 32px rgba(0,0,0,.5);} }
+  #uplinkOverlay .uplink-top { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+  #uplinkOverlay .mini-orb { width:30px; height:30px; border-radius:50%; flex:none;
+    background:conic-gradient(from 0deg, #00f0ff, #b537f2, #00f0ff); animation:spin 4s linear infinite;
+    box-shadow:0 0 14px rgba(0,240,255,.7); position:relative; }
+  #uplinkOverlay .mini-orb::after { content:""; position:absolute; inset:5px; border-radius:50%; background:#0a1122; }
+  #uplinkCloseBtn { margin-left:auto; background:none; border:1px solid rgba(0,240,255,.4); color:#00f0ff;
+    border-radius:6px; width:26px; height:26px; cursor:pointer; font-size:14px; line-height:1; padding:0; }
+  #localConnectBtn.loading { pointer-events:none; opacity:.85; }
+  #localConnectBtn.loading::after { content:""; display:inline-block; width:12px; height:12px; margin-left:8px;
+    border:2px solid rgba(255,255,255,.35); border-top-color:#fff; border-radius:50%;
+    animation:spin .7s linear infinite; vertical-align:-1px; }
+  #localStatusEl.busy { animation:pulse 1s ease-in-out infinite; }
+  .topbar { display:flex; align-items:center; gap:10px; margin-bottom:12px; }
+  .agent-orb.small { width:30px; height:30px; }
+  .agent-orb.small::after { inset:5px; }
+  .studio-name { font-size:17px; font-weight:700; letter-spacing:1.5px; color:#fff; }
+  .badge { font-size:12px; padding:4px 12px; border-radius:20px; letter-spacing:.5px; border:1px solid; white-space:nowrap; }
+  .badge.off { color:#ff8fa3; border-color:rgba(255,84,112,.5); background:rgba(255,84,112,.1); }
+  .badge.on { color:#00ffa3; border-color:rgba(0,255,163,.5); background:rgba(0,255,163,.08); box-shadow:0 0 12px rgba(0,255,163,.25); }
+  #appEl { flex:1; display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+  .ide3 { flex:1; min-height:0; overflow:hidden; margin-bottom:12px; display:flex; gap:12px; align-items:stretch; }
+  .center-col { flex:1; min-width:0; display:flex; flex-direction:column; }
+  .center-col .panel { flex:1; display:flex; flex-direction:column; min-height:0; overflow:hidden; margin-bottom:0; }
+  .sidebar { width:240px; flex:none; position:relative; display:flex; flex-direction:column; margin-bottom:0; }
+  .sidebar h4 { display:flex; justify-content:space-between; align-items:center; }
+  .icon-btn { background:none; border:1px solid rgba(0,240,255,.4); color:#00f0ff; border-radius:6px;
+    width:24px; height:24px; line-height:1; cursor:pointer; font-size:13px; padding:0; }
+  .icon-btn:hover { box-shadow:0 0 10px rgba(0,240,255,.5); }
+  #localFilesEl { font-size:13px; overflow:auto; border:1px solid rgba(0,240,255,.2); flex:1; min-height:0;
+    border-radius:9px; padding:6px; background:#050a15; font-family:Consolas,monospace; }
+  #sideResize { position:absolute; top:0; right:-8px; width:15px; height:100%; cursor:ew-resize; z-index:5; }
+  #sideResize::after { content:""; position:absolute; top:0; bottom:0; left:6px; width:2px; background:transparent; border-radius:2px; transition:background .15s; }
+  #sideResize:hover::after, #sideResize.on::after { background:rgba(0,240,255,.6); box-shadow:0 0 8px rgba(0,240,255,.6); }
+  .tabbar { display:flex; align-items:center; gap:8px; padding:9px 14px; font-size:13px; color:#bffaff;
+    border-bottom:1px solid rgba(0,240,255,.2); background:rgba(255,255,255,.03); }
+  #fileTabName { font-family:Consolas,monospace; }
+  .codewrap { display:flex; background:#050a15; flex:1; min-height:0; }
+  #lineNos { padding:10px 8px 10px 12px; text-align:right; font-family:Consolas,monospace; font-size:12.5px;
+    line-height:1.55; color:#3d4f6e; user-select:none; overflow:hidden; white-space:pre; }
+  #pcEditorEl { flex:1; min-width:0; min-height:200px; box-sizing:border-box; background:transparent; color:#c8f5ff;
+    border:none; padding:10px; font-family:Consolas,monospace; font-size:12.5px; line-height:1.55;
+    outline:none; resize:none; tab-size:4; caret-color:#e8f4ff; }
+  #pcEditorEl::selection { background:rgba(0,240,255,.35); }
+  .ai-col { width:300px; flex:none; display:flex; flex-direction:column; margin-bottom:0; }
+  .ai-col #chatEl { flex:1; overflow:auto; display:flex; flex-direction:column; gap:8px; min-height:0; margin-bottom:8px; }
+  .msg { max-width:88%; padding:8px 12px; border-radius:12px; font-size:13px; line-height:1.5; white-space:pre-wrap; word-break:break-word; }
+  .msg.ai { align-self:flex-start; background:rgba(0,240,255,.08); border:1px solid rgba(0,240,255,.25); color:#d9ecff; border-bottom-left-radius:4px; }
+  .msg.user { align-self:flex-end; background:linear-gradient(135deg,rgba(0,240,255,.22),rgba(181,55,242,.22)); border:1px solid rgba(0,240,255,.4); color:#fff; border-bottom-right-radius:4px; }
+  .msg.err { border-color:rgba(255,84,112,.6); color:#ffb3c1; }
+  .typing { align-self:flex-start; display:flex; gap:4px; padding:10px 14px; background:rgba(0,240,255,.08); border:1px solid rgba(0,240,255,.25); border-radius:12px; }
+  .typing span { width:7px; height:7px; border-radius:50%; background:#00f0ff; animation:blink 1.2s infinite; }
+  .typing span:nth-child(2) { animation-delay:.2s; } .typing span:nth-child(3) { animation-delay:.4s; }
+  @keyframes blink { 0%,60%,100% { opacity:.25; } 30% { opacity:1; } }
+  #agentStatus { font-size:11px; color:#5b6b88; margin-bottom:8px; font-family:Consolas,monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .chat-row { display:flex; gap:8px; align-items:center; }
+  .send-btn { flex:none; width:40px; height:40px; border-radius:50%; border:1px solid #00f0ff; cursor:pointer;
+    font-size:16px; color:#04121a; background:linear-gradient(135deg,#00f0ff,#7df9ff);
+    box-shadow:0 0 14px rgba(0,240,255,.5); transition:all .15s; }
+  .send-btn:hover { box-shadow:0 0 22px rgba(0,240,255,.8); transform:scale(1.05); }
+  .term { padding:0; overflow:hidden; }
+  .term-bar { display:flex; align-items:center; gap:7px; background:rgba(255,255,255,.045);
+    padding:7px 10px; border-bottom:1px solid rgba(0,240,255,.2); }
+  .tdot { width:10px; height:10px; border-radius:50%; flex:none; }
+  .term-title { margin-left:4px; font-size:11px; letter-spacing:2px; color:#7f93b3; }
+  #termHideBtn { margin-left:auto; background:none; border:1px solid rgba(0,240,255,.4); color:#00f0ff;
+    border-radius:6px; width:24px; height:22px; cursor:pointer; font-size:12px; line-height:1; padding:0; }
+  .term pre { margin:0; min-height:90px; max-height:200px; overflow:auto;
+    background:#030710; color:#8dffcb; padding:12px; font-family:Consolas,monospace; font-size:12.5px;
+    white-space:pre-wrap; box-shadow:inset 0 0 24px rgba(0,255,163,.05); }
+  .bottombar { display:flex; align-items:center; gap:4px; background:rgba(255,255,255,.03);
+    border:1px solid rgba(0,240,255,.2); border-radius:10px; padding:5px 8px; margin-top:0; font-size:12.5px; }
+  .btab { background:none; border:none; color:#7f93b3; cursor:pointer; padding:5px 10px; border-radius:7px;
+    font-family:inherit; font-size:12.5px; letter-spacing:.5px; }
+  .btab:hover { color:#d9ecff; }
+  .btab.active { color:#00f0ff; background:rgba(0,240,255,.1); }
+  #srvUrl { margin-left:auto; color:#5b6b88; font-size:12px; font-family:Consolas,monospace; }
+  .trow { padding:3px 6px; cursor:pointer; border-radius:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .trow:hover { background:rgba(0,240,255,.12); }
+  .trow.sel { background:rgba(0,240,255,.25); }
+  button { cursor:pointer; }
+  @media (max-width:900px){ .ide3 { flex-direction:column; } .ai-col { width:100%; } .sidebar { width:100% !important; } #sideResize { display:none; }
+    body { overflow:auto; } #mainEl { height:auto; min-height:100vh; overflow:visible; }
+    #appEl, .ide3 { overflow:visible; } .codewrap { min-height:320px; } }
+</style>
+</head>
+<body>
+
+<div id="mainEl">
+  <div class="topbar">
+    <div class="agent-orb small"></div>
+    <span class="studio-name">Coding Agent</span>
+    <span style="margin-left:auto;display:flex;gap:8px;align-items:center;">
+      <span id="connBadge" class="badge off">● Disconnected</span>
+      <button id="reconnectBtn" class="btn" hidden style="padding:6px 10px;font-size:12px;">⟳ Reconnect</button>
+    </span>
+  </div>
+
+  <div id="uplinkOverlay">
+    <div class="panel uplink-card" id="uplinkPanel">
+      <div class="uplink-top">
+        <div class="mini-orb"></div>
+        <h4 style="margin:0;">◈ Uplink — local server</h4>
+        <button id="uplinkCloseBtn" hidden title="Close">✕</button>
+      </div>
+      <div class="row" style="margin-bottom:10px;">
+        <input type="text" id="localBaseInput" value="http://127.0.0.1:18777">
+        <input type="text" id="localTokenInput" placeholder="paste the server token here">
+        <button id="localConnectBtn" class="btn primary">CONNECT</button>
+      </div>
+      <div class="status-row"><span class="dot" id="linkDot"></span><span id="localStatusEl">local server: not connected</span></div>
+    </div>
+  </div>
+
+  <div id="appEl" hidden>
+    <div class="ide3">
+      <aside class="panel sidebar">
+        <h4>◈ Explorer <button id="localRefreshBtn" class="icon-btn" title="Refresh files">⟳</button></h4>
+        <div id="localFilesEl">connect to load files…</div>
+        <div id="sideResize" title="Drag to resize"></div>
+      </aside>
+      <section class="center-col">
+        <div class="panel" style="padding:0;overflow:hidden;">
+          <div class="tabbar">📄 <span id="fileTabName">untitled</span><button id="pcSaveBtn" class="icon-btn" style="margin-left:auto;width:auto;padding:2px 10px;height:24px;" title="Save file">💾 Save</button></div>
+          <div class="codewrap">
+            <div id="lineNos">1</div>
+            <textarea id="pcEditorEl" rows="16" placeholder="select a file from the Explorer…" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+          </div>
+        </div>
+      </section>
+      <aside class="panel ai-col">
+        <h4>◈ AI agent</h4>
+        <div id="chatEl"><div class="msg ai">How can I help with your project? Select a file, describe the change, and press send.</div></div>
+        <div id="agentStatus">● idle</div>
+        <div class="chat-row">
+          <div class="cmd-wrap" style="flex:1;margin:0;"><span>&gt;_</span><input type="text" id="pcTaskInput" placeholder="Ask the agent…"></div>
+          <button id="pcAskBtn" class="send-btn" title="Send">➤</button>
+        </div>
+      </aside>
+    </div>
+
+    <div class="panel term" id="termPanel">
+      <div class="term-bar"><span class="tdot" style="background:#ff5f57;"></span><span class="tdot" style="background:#febc2e;"></span><span class="tdot" style="background:#28c840;"></span><span class="term-title" id="termTitle">terminal — session</span><button id="termHideBtn" title="Hide panel">⌄</button></div>
+      <pre id="sessPre">Session started. Awaiting uplink…</pre>
+      <pre id="probPre" hidden>Connect to index files.</pre>
+      <pre id="outPre" hidden>Awaiting orders…</pre>
+    </div>
+
+    <div class="bottombar">
+      <button class="btab active" id="tabTerm">Terminal</button>
+      <button class="btab" id="tabProb">Problems</button>
+      <button class="btab" id="tabOut">Output</button>
+      <span id="srvUrl">not connected</span>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------------------------------------------------------------
+  // AI via Perchance ai-text-plugin.
+  // Is file ko naye generator me use karne ke liye main.pjs me ye line chahiye:
+  //   generateText = {import:ai-text-plugin}
+  // Phir root.generateText yahan seedha kaam karega.
+  // ---------------------------------------------------------------
+  async function doCodeTask(payload) {
+    if (!window.root || !root.generateText) throw new Error("generateText plugin did not load. main.pjs me 'generateText = {import:ai-text-plugin}' hona chahiye.");
+    var task = (payload && payload.task) || "";
+    var files = (payload && payload.files) || [];
+    if (!task) throw new Error("doCodeTask needs a task.");
+    // small prompt = fast + cheap. Max 4 files x 6000 chars.
+    var clipped = files.slice(0, 4).map(function (f) {
+      var c = String(f.content || "");
+      if (c.length > 6000) c = c.slice(0, 6000) + "\n...[truncated, rest of file not sent]...";
+      return "--- FILE: " + f.path + "\n" + c;
+    }).join("\n\n");
+
+    // NOTE: keep the first 2 lines identical every time so prefix-cache hits keep it fast.
+    var instruction =
+      "You are a senior programmer who replies with only a JSON object.\n" +
+      "PROJECT FILES are below, the TASK is at the very end.\n" +
+      "PROJECT FILES:\n" + (clipped || "(no files were sent)") + "\n\n" +
+      "TASK:\n" + task + "\n\n" +
+      "RULES:\n" +
+      "1. Output only a valid JSON object, no markdown, no fences, no commentary, no trailing commas.\n" +
+      "2. Schema: {\"explanation\": string, \"edits\": [{\"path\": string, \"content\": string}]}\n" +
+      "3. In edits, give the FULL new content of each file, not a diff/patch. Escape strings properly.\n" +
+      "4. Max 4 files, keep the output small. Don't touch unrelated files.\n" +
+      "5. If the task is unclear, make your best guess and say so in the explanation.";
+
+    // startWith "{" forces the reply to begin as a JSON object (no preamble, no fences).
+    var raw = String(await root.generateText({ instruction: instruction, startWith: "{" }));
+    var first = tryParseJson(raw);
+    if (first.ok && first.value.edits) {
+      return { explanation: String(first.value.explanation || ""), edits: first.value.edits, raw: raw.slice(0, 4000) };
+    }
+    // One repair retry: same prefix (cache-friendly) + correction appended at the end.
+    setStatus("fixing format…");
+    var retryInstruction = instruction + "\n\nYour previous reply was NOT valid JSON (" + (first.error || "parse failed") + "). Reply again with ONLY the corrected JSON object, nothing else. It began with: " + raw.slice(0, 800);
+    var raw2 = String(await root.generateText({ instruction: retryInstruction, startWith: "{" }));
+    var second = tryParseJson(raw2);
+    if (second.ok && second.value.edits) {
+      return { explanation: String(second.value.explanation || ""), edits: second.value.edits, raw: raw2.slice(0, 4000) };
+    }
+    // Still not JSON — show both attempts so nothing is hidden.
+    return { explanation: "The AI did not return JSON, see raw text.", edits: [], raw: (raw + "\n\n--- retry ---\n\n" + raw2).slice(0, 4000) };
+  }
+
+  function openUplink() {
+    var ov = document.getElementById("uplinkOverlay");
+    ov.hidden = false;
+    void ov.offsetWidth;
+    ov.classList.remove("fade");
+  }
+  function closeUplinkPopup() {
+    var ov = document.getElementById("uplinkOverlay");
+    ov.classList.add("fade");
+    setTimeout(function () {
+      ov.hidden = true;
+      ov.classList.remove("fade", "success");
+    }, 450);
+  }
+  document.getElementById("reconnectBtn").addEventListener("click", function () {
+    document.getElementById("uplinkCloseBtn").hidden = false;
+    openUplink();
+  });
+  document.getElementById("uplinkCloseBtn").addEventListener("click", function () {
+    document.getElementById("uplinkOverlay").hidden = true;
+  });
+
+  function tryParseJson(text) {
+    // Returns {ok, value} or {ok:false, error}. Tries fenced block, brace-slice, trailing-comma repair.
+    var lastErr = "no JSON found";
+    var cands = [];
+    var m = String(text).match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (m) cands.push(m[1]);
+    cands.push(String(text));
+    for (var k = 0; k < cands.length; k++) {
+      var cand = cands[k];
+      var a = cand.indexOf("{");
+      var b = cand.lastIndexOf("}");
+      if (a >= 0 && b > a) cand = cand.slice(a, b + 1);
+      try { return { ok: true, value: JSON.parse(cand) }; }
+      catch (e) { lastErr = e.message; }
+      try { return { ok: true, value: JSON.parse(cand.replace(/,\s*([}\]])/g, "$1")) }; }
+      catch (e2) { lastErr = e2.message; }
+    }
+    return { ok: false, error: lastErr };
+  }
+
+  // ---- localhost file server ----
+  var pcFile = null;
+  var pcFiles = [];
+  var projectRoot = "project";
+  var collapsed = {};
+  function pcLog(msg) {
+    document.getElementById("outPre").textContent = msg;
+    var s = document.getElementById("agentStatus");
+    if (s) s.textContent = "● " + String(msg).slice(0, 60);
+  }
+  function pcBase() { return document.getElementById("localBaseInput").value.replace(/\/+$/, ""); }
+  function pcToken() { return document.getElementById("localTokenInput").value.trim(); }
+  async function localCall(path, opts) {
+    opts = opts || {};
+    var headers = { "x-bridge-token": pcToken() };
+    if (opts.body) headers["Content-Type"] = "application/json";
+    var r;
+    try {
+      r = await fetch(pcBase() + path, { method: opts.method || "GET", headers: headers, body: opts.body });
+    } catch (e) {
+      throw new Error("Could not reach the local server. Is it running? (" + pcBase() + ") — " + e.message);
+    }
+    var j = await r.json().catch(function () { return null; });
+    if (!r.ok || !j || j.ok === false) throw new Error("local server error: " + ((j && j.error) || r.status));
+    return j;
+  }
+  document.getElementById("localConnectBtn").addEventListener("click", async function () {
+    var btn = document.getElementById("localConnectBtn");
+    var st = document.getElementById("localStatusEl");
+    var ov = document.getElementById("uplinkOverlay");
+    btn.classList.add("loading");
+    btn.textContent = "LINKING";
+    st.classList.add("busy");
+    st.textContent = "linking to local server…";
+    try {
+      var s = await localCall("/status");
+      st.classList.remove("busy");
+      st.textContent = "connected ✓ (" + (s.root || "") + ", " + (s.files || 0) + " files)";
+      document.getElementById("linkDot").classList.add("on");
+      var badge = document.getElementById("connBadge");
+      badge.classList.remove("off"); badge.classList.add("on"); badge.textContent = "● Connected";
+      document.getElementById("srvUrl").textContent = pcBase();
+      projectRoot = String((s.root || "").split(/[/\\]/).filter(Boolean).pop() || "project");
+      ov.classList.add("success");
+      slog("Uplink established — " + (s.files || 0) + " files at " + (s.root || ""));
+      pcLog("Uplink established. Loading files…");
+      setTimeout(function () {
+        btn.classList.remove("loading");
+        btn.textContent = "CONNECT";
+        document.getElementById("appEl").hidden = false;
+        document.getElementById("reconnectBtn").hidden = false;
+        refreshFiles();
+        closeUplinkPopup();
+      }, 950);
+    } catch (e) {
+      btn.classList.remove("loading");
+      btn.textContent = "CONNECT";
+      st.classList.remove("busy");
+      st.textContent = "link failed — check server & token";
+      slog("Link failed: " + e.message);
+      pcLog("ERROR: " + e.message);
+    }
+  });
+  function renderPcFiles() {
+    var box = document.getElementById("localFilesEl");
+    box.innerHTML = "";
+    if (!pcFiles.length) { box.innerHTML = '<div style="opacity:.5;padding:4px 6px;">∅ empty folder</div>'; return; }
+    var tree = { name: projectRoot, kids: {}, files: [] };
+    pcFiles.forEach(function (f) {
+      var parts = String(f).split(/[/\\]/);
+      var node = tree;
+      for (var i = 0; i < parts.length - 1; i++) {
+        node.kids[parts[i]] = node.kids[parts[i]] || { name: parts[i], kids: {}, files: [] };
+        node = node.kids[parts[i]];
+      }
+      node.files.push({ name: parts[parts.length - 1], full: f });
+    });
+    var rootRow = document.createElement("div");
+    rootRow.className = "trow";
+    rootRow.style.cssText = "font-weight:700;color:#fff;cursor:default;";
+    rootRow.textContent = "📂 " + tree.name;
+    box.appendChild(rootRow);
+    box.appendChild(renderTreeNode(tree, tree.name + "/", 0));
+  }
+  function renderTreeNode(node, prefix, depth) {
+    var wrap = document.createElement("div");
+    Object.keys(node.kids).sort().forEach(function (n) {
+      var kid = node.kids[n], key = prefix + n;
+      var shut = collapsed[key];
+      var fr = document.createElement("div");
+      fr.className = "trow";
+      fr.textContent = (shut ? "▸ 📁 " : "▾ 📂 ") + n;
+      fr.style.paddingLeft = (depth * 14 + 6) + "px";
+      fr.onclick = (function (k) {
+        return function () { if (collapsed[k]) delete collapsed[k]; else collapsed[k] = 1; renderPcFiles(); };
+      })(key);
+      wrap.appendChild(fr);
+      if (!shut) wrap.appendChild(renderTreeNode(kid, key + "/", depth + 1));
+    });
+    node.files.sort(function (x, y) { return x.name < y.name ? -1 : 1; }).forEach(function (fl) {
+      var div = document.createElement("div");
+      div.className = "trow" + (fl.full === pcFile ? " sel" : "");
+      div.textContent = "📄 " + fl.name;
+      div.style.paddingLeft = (depth * 14 + 6) + "px";
+      div.title = fl.full;
+      div.onclick = async function () {
+        pcFile = fl.full; renderPcFiles();
+        try {
+          var j = await localCall("/read?path=" + encodeURIComponent(fl.full));
+          document.getElementById("pcEditorEl").value = j.content;
+          setTab(fl.full, false); syncGutter();
+          pcLog("read: " + fl.full);
+        } catch (e) { pcLog("ERROR: " + e.message); }
+      };
+      wrap.appendChild(div);
+    });
+    return wrap;
+  }
+  async function refreshFiles() {
+    try {
+      var j = await localCall("/list");
+      pcFiles = j.files || [];
+      renderPcFiles();
+      pcLog(pcFiles.length ? pcFiles.length + " files loaded. Click a file." : "Folder is empty.");
+      document.getElementById("probPre").textContent = pcFiles.length ? "✓ No problems — " + pcFiles.length + " files indexed." : "Empty folder — nothing to index.";
+      slog(pcFiles.length ? "Indexed " + pcFiles.length + " files" : "Folder is empty");
+    } catch (e) { pcLog("ERROR: " + e.message); slog("List failed: " + e.message); }
+  }
+  document.getElementById("localRefreshBtn").addEventListener("click", refreshFiles);
+  // ---- file tab, line gutter, session log, bottom tabs ----
+  function setTab(name, dirty) {
+    document.getElementById("fileTabName").textContent = (dirty ? "● " : "") + (name || "untitled");
+  }
+  function slog(m) {
+    var el = document.getElementById("sessPre");
+    el.textContent += (el.textContent ? "\n" : "") + "[" + new Date().toLocaleTimeString() + "] " + m;
+    el.scrollTop = el.scrollHeight;
+  }
+  function syncGutter() {
+    var ed = document.getElementById("pcEditorEl"), ln = document.getElementById("lineNos");
+    var n = ed.value.split("\n").length || 1, s = "";
+    for (var i = 1; i <= n; i++) s += i + "\n";
+    ln.textContent = s;
+    ln.scrollTop = ed.scrollTop;
+  }
+  (function () {
+    var ed = document.getElementById("pcEditorEl"), ln = document.getElementById("lineNos");
+    ed.addEventListener("input", function () { syncGutter(); setTab(pcFile, true); });
+    ed.addEventListener("scroll", function () { ln.scrollTop = ed.scrollTop; });
+    syncGutter();
+  })();
+  (function () {
+    var panes = { tabTerm: ["sessPre", "terminal — session"], tabProb: ["probPre", "problems"], tabOut: ["outPre", "output — agent activity"] };
+    Object.keys(panes).forEach(function (id) {
+      document.getElementById(id).addEventListener("click", function () {
+        var panel = document.getElementById("termPanel");
+        var already = document.getElementById(id).classList.contains("active");
+        if (!panel.hidden && already) { panel.hidden = true; return; }
+        panel.hidden = false;
+        Object.keys(panes).forEach(function (k) {
+          document.getElementById(k).classList.toggle("active", k === id);
+          document.getElementById(panes[k][0]).hidden = (k !== id);
+        });
+        document.getElementById("termTitle").textContent = panes[id][1];
+      });
+    });
+  })();
+  // ---- IDE sidebar resize (drag) ----
+  (function () {
+    var sideEl = document.querySelector(".sidebar");
+    try {
+      var savedW = parseInt(localStorage.getItem("codingAgentSideW"), 10);
+      if (savedW >= 170 && savedW <= 520) sideEl.style.width = savedW + "px";
+    } catch (e) {}
+    var h = document.getElementById("sideResize"), sx = 0, sw = 0, on = false;
+    h.addEventListener("mousedown", function (e) { on = true; sx = e.clientX; sw = sideEl.offsetWidth; h.classList.add("on"); e.preventDefault(); });
+    document.addEventListener("mousemove", function (e) {
+      if (!on) return;
+      sideEl.style.width = Math.max(170, Math.min(520, sw + e.clientX - sx)) + "px";
+    });
+    document.addEventListener("mouseup", function () {
+      if (!on) return; on = false; h.classList.remove("on");
+      try { localStorage.setItem("codingAgentSideW", String(sideEl.offsetWidth)); } catch (e) {}
+    });
+  })();
+  // ---- terminal show/hide ----
+  function toggleTerm() {
+    var t = document.getElementById("termPanel");
+    t.hidden = !t.hidden;
+  }
+  document.getElementById("termHideBtn").addEventListener("click", toggleTerm);
+  function addChat(who, text) {
+    var c = document.getElementById("chatEl");
+    var d = document.createElement("div");
+    d.className = "msg " + who;
+    d.textContent = text;
+    c.appendChild(d);
+    c.scrollTop = c.scrollHeight;
+  }
+  function setStatus(s) { document.getElementById("agentStatus").textContent = "● " + s; }
+  document.getElementById("pcTaskInput").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") document.getElementById("pcAskBtn").click();
+  });
+  document.getElementById("pcAskBtn").addEventListener("click", async function () {
+    var task = document.getElementById("pcTaskInput").value.trim();
+    if (!task) return;
+    if (!pcFile) { addChat("ai err", "Select a file from the Explorer first."); return; }
+    addChat("user", task);
+    document.getElementById("pcTaskInput").value = "";
+    var c = document.getElementById("chatEl");
+    var ty = document.createElement("div");
+    ty.className = "typing"; ty.innerHTML = "<span></span><span></span><span></span>";
+    c.appendChild(ty); c.scrollTop = c.scrollHeight;
+    setStatus("thinking…");
+    try {
+      var content = document.getElementById("pcEditorEl").value.slice(0, 6000);
+      var res = await doCodeTask({ task: task, files: [{ path: pcFile, content: content }] });
+      ty.remove();
+      pcLog("AI answered: " + task.slice(0, 80));
+      if (res.edits && res.edits.length) {
+        pcFile = res.edits[0].path;
+        document.getElementById("pcEditorEl").value = res.edits[0].content;
+        setTab(res.edits[0].path, true);
+        syncGutter();
+        addChat("ai", "✓ " + res.edits.length + " file(s) ready — approval pending in your terminal. Press y + Enter.");
+        setStatus("waiting for approval…");
+        var approved = 0, rejected = 0;
+        for (var i = 0; i < res.edits.length; i++) {
+          try {
+            await localCall("/write", { method: "POST", body: JSON.stringify({ path: res.edits[i].path, content: res.edits[i].content }) });
+            approved++;
+            slog("Approved + saved " + res.edits[i].path);
+          } catch (e) {
+            rejected++;
+            slog("Not saved (" + res.edits[i].path + "): " + e.message);
+          }
+        }
+        setTab(res.edits[0].path, rejected === res.edits.length);
+        refreshFiles(); setStatus("idle");
+        if (rejected === 0) addChat("ai", "✓ All approved and saved.");
+        else if (approved === 0) addChat("ai err", "Rejected in terminal — no changes saved.");
+        else addChat("ai", "✓ " + approved + " approved, ✗ " + rejected + " rejected in terminal.");
+      } else {
+        addChat("ai", (res.explanation || "Done.") + (res.raw ? "\n\n" + String(res.raw).slice(0, 1500) : ""));
+      }
+      setStatus("idle");
+    } catch (e) {
+      ty.remove();
+      addChat("ai err", "ERROR: " + e.message);
+      setStatus("error");
+      pcLog("ERROR: " + e.message);
+    }
+  });
+  document.getElementById("pcSaveBtn").addEventListener("click", async function () {
+    if (!pcFile) { pcLog("no file selected"); return; }
+    if (!confirm("Save? " + pcFile)) return;
+    try {
+      await localCall("/write", { method: "POST", body: JSON.stringify({ path: pcFile, content: document.getElementById("pcEditorEl").value }) });
+      pcLog("saved: " + pcFile);
+      setTab(pcFile, false); slog("Saved " + pcFile);
+      refreshFiles();
+    } catch (e) { pcLog("ERROR: " + e.message); }
+  });
+})();
+</script>
+</body>
+</html>
